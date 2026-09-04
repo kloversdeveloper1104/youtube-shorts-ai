@@ -2,17 +2,12 @@
 // 06:00 Trend収集 / 07:00 Viral分析 / 08:00 Idea生成
 // 投稿サイクルは約60分間隔(±15分のランダムジッター)で実行し、
 // 1日の投稿数がmaxPostsPerDayに達したらその日はスキップする / 23:30 戦略分析 / 随時 Analytics測定
+//
+// ローカルPCを常時起動しておく運用向け。PCを消していても投稿を続けたい場合は
+// GitHub Actions(.github/workflows/scheduler.yml + ci-run.ts)を使う。
 
 import "dotenv/config";
-import { prisma } from "@/database/client";
-import { collectTrends, collectTrendingChart } from "@/agents/trend";
-import { analyzeUnanalyzedVideos } from "@/agents/viral";
-import { generateDailyIdeas } from "@/agents/idea";
-import { runAutoCycle } from "./pipeline";
-import { measureAndEvaluate } from "@/agents/analytics";
-import { updateStrategy } from "@/agents/strategy";
-import { getAutoMode } from "@/utils/env";
-import { logError } from "@/utils/logger";
+import { runTask, checkAnalytics } from "./tasks";
 
 const FIXED_SCHEDULE: Array<{ hour: number; minute: number; task: string }> = [
   { hour: 6, minute: 0, task: "TREND" },
@@ -32,79 +27,7 @@ function scheduleNextCycle(from: Date): Date {
 }
 
 let nextCycleAt: Date | null = null;
-
-const ANALYTICS_WINDOWS: Array<{ label: "24h" | "48h" | "72h" | "7d"; hours: number }> = [
-  { label: "24h", hours: 24 },
-  { label: "48h", hours: 48 },
-  { label: "72h", hours: 72 },
-  { label: "7d", hours: 24 * 7 },
-];
-
 const ranToday = new Set<string>();
-
-async function runTask(task: string) {
-  console.log(`[Worker] ${new Date().toISOString()} タスク実行: ${task}`);
-  try {
-    const channel = (await prisma.channel.findFirst()) ?? (await prisma.channel.create({
-      data: { googleAccountEmail: "kloversmovie@gmail.com" },
-    }));
-
-    switch (task) {
-      case "TREND":
-        await collectTrends();
-        await collectTrendingChart();
-        break;
-      case "VIRAL":
-        await analyzeUnanalyzedVideos(10);
-        break;
-      case "IDEA":
-        await generateDailyIdeas(10);
-        break;
-      case "CYCLE": {
-        const mode = channel.autoMode !== "OFF" ? channel.autoMode : getAutoMode();
-        if (mode === "OFF") break;
-
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-        const todaysUploads = await prisma.upload.count({
-          where: { status: "UPLOADED", publishedAt: { gte: todayStart } },
-        });
-        if (todaysUploads >= channel.maxPostsPerDay) {
-          console.log(`[Worker] 本日の投稿上限(${channel.maxPostsPerDay}件)に達しているためCYCLEをスキップします。`);
-          break;
-        }
-
-        await runAutoCycle({ autoUpload: mode === "FULL", privacyStatus: "public" });
-        break;
-      }
-      case "STRATEGY":
-        await updateStrategy(channel.id);
-        break;
-    }
-  } catch (err) {
-    await logError("Worker", err, { task });
-  }
-}
-
-async function checkAnalytics() {
-  const uploads = await prisma.upload.findMany({
-    where: { status: "UPLOADED", youtubeVideoId: { not: null } },
-    include: { video: { include: { script: true, analytics: true } } },
-  });
-
-  for (const upload of uploads) {
-    if (!upload.publishedAt) continue;
-    const hoursSince = (Date.now() - upload.publishedAt.getTime()) / (1000 * 60 * 60);
-
-    for (const window of ANALYTICS_WINDOWS) {
-      if (hoursSince < window.hours) continue;
-      const already = upload.video.analytics.some((a) => a.windowLabel === window.label);
-      if (already) continue;
-
-      await measureAndEvaluate(upload.video, upload.video.script, upload, window.label);
-    }
-  }
-}
 
 async function tick() {
   const now = new Date();

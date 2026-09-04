@@ -11,7 +11,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "auto": "tsx src/scheduler/auto.ts",
-    "worker": "tsx src/scheduler/worker.ts"
+    "worker": "tsx src/scheduler/worker.ts",
+    "ci-run": "tsx src/scheduler/ci-run.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

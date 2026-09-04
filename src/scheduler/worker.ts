@@ -28,8 +28,21 @@ function scheduleNextCycle(from: Date): Date {
 
 let nextCycleAt: Date | null = null;
 const ranToday = new Set<string>();
+let isTicking = false;
 
 async function tick() {
+  // setIntervalは前回のtick()完了を待たないため、1分ごとの発火が重なると
+  // CYCLEが多重実行される(重複投稿)バグがあった。再入防止ロックで防ぐ。
+  if (isTicking) return;
+  isTicking = true;
+  try {
+    await doTick();
+  } finally {
+    isTicking = false;
+  }
+}
+
+async function doTick() {
   const now = new Date();
   const key = `${now.toDateString()}-${now.getHours()}-${now.getMinutes()}`;
 
@@ -44,10 +57,11 @@ async function tick() {
   }
 
   // CYCLE(投稿)は約60分±15分のランダム間隔で実行(1日の上限はrunTask内でチェック)
+  // 次回時刻は実行"前"に予約する(実行中に再度条件を満たして多重実行されるのを防ぐ)
   if (!nextCycleAt) nextCycleAt = scheduleNextCycle(now);
   if (now >= nextCycleAt) {
-    await runTask("CYCLE");
     nextCycleAt = scheduleNextCycle(now);
+    await runTask("CYCLE");
   }
 
   // 古いキーを掃除(メモリリーク防止)
